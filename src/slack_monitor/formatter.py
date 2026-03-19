@@ -1,8 +1,12 @@
 """Rich-based terminal formatter for analysis results."""
 
-from rich.columns import Columns
+import sys
+from datetime import datetime, timezone
+
 from rich.console import Console
+from rich.live import Live
 from rich.panel import Panel
+from rich.spinner import Spinner
 from rich.text import Text
 
 from slack_monitor.buffer import FlushReason
@@ -27,6 +31,64 @@ _FLUSH_REASON_LABELS = {
     FlushReason.COUNT: "# count",
     FlushReason.CHARS: "⚠ chars",
 }
+
+
+class StatusBar:
+    """Live status bar shown while buffering messages (stderr)."""
+
+    def __init__(self, window_seconds: int) -> None:
+        self._window_seconds = window_seconds
+        self._count = 0
+        self._last_preview = ""
+        self._analyzing = False
+        self._window_start: datetime = datetime.now(timezone.utc)
+        self._console = Console(stderr=True)
+        self._live = Live(
+            self._render(),
+            console=self._console,
+            refresh_per_second=4,
+            transient=True,
+        )
+
+    def start(self) -> None:
+        self._live.start()
+
+    def stop(self) -> None:
+        self._live.stop()
+
+    def update(self, count: int, last_preview: str = "") -> None:
+        self._count = count
+        if last_preview:
+            self._last_preview = last_preview
+        self._analyzing = False
+        self._live.update(self._render())
+
+    def set_analyzing(self) -> None:
+        self._analyzing = True
+        self._live.update(self._render())
+
+    def reset_window(self) -> None:
+        self._window_start = datetime.now(timezone.utc)
+        self._count = 0
+        self._last_preview = ""
+
+    def _render(self) -> Text:
+        elapsed = (datetime.now(timezone.utc) - self._window_start).seconds
+        remaining = max(0, self._window_seconds - elapsed)
+
+        t = Text()
+        if self._analyzing:
+            t.append("⚙ ", style="yellow")
+            t.append("Analyzing...", style="bold yellow")
+        else:
+            t.append("● ", style="green")
+            t.append(f"{self._count} msgs buffered", style="bold")
+            t.append(f"  next analysis in ", style="dim")
+            t.append(f"{remaining}s", style="cyan")
+            if self._last_preview:
+                preview = self._last_preview[:60].replace("\n", " ")
+                t.append(f"  └ {preview}", style="dim")
+        return t
 
 
 class Formatter:

@@ -13,7 +13,7 @@ import logging
 from datetime import timezone
 
 from slack_monitor.buffer import FlushReason, FlushResult, MessageBuffer
-from slack_monitor.formatter import Formatter
+from slack_monitor.formatter import Formatter, StatusBar
 from slack_monitor.llm import LLMClient
 from slack_monitor.models import AnalysisResult, AppConfig
 from slack_monitor.prompts import SYSTEM_PROMPT, build_user_prompt
@@ -39,6 +39,7 @@ class AnalyzerEngine:
         self._formatter = formatter
         self._channel = channel
         self._queue: asyncio.Queue[FlushResult] = asyncio.Queue()
+        self._status = StatusBar(config.window_seconds)
 
     async def run(self, stream: asyncio.StreamReader) -> None:
         """Start the analysis pipeline.
@@ -48,6 +49,7 @@ class AnalyzerEngine:
         - _tick_task: drives time-based flushes
         - _dispatch_task: serializes LLM calls from the queue
         """
+        self._status.start()
         ingest = asyncio.create_task(self._ingest_task(stream), name="ingest")
         tick = asyncio.create_task(self._tick_task(), name="tick")
         dispatch = asyncio.create_task(self._dispatch_task(), name="dispatch")
@@ -61,6 +63,7 @@ class AnalyzerEngine:
             tick.cancel()
             dispatch.cancel()
             await asyncio.gather(tick, dispatch, return_exceptions=True)
+            self._status.stop()
 
             # Flush any remaining messages
             remaining = self._buffer.flush(FlushReason.TIME)
@@ -73,6 +76,9 @@ class AnalyzerEngine:
             flush_result = self._buffer.add(msg)
             if flush_result is not None:
                 await self._queue.put(flush_result)
+            else:
+                preview = f"@{msg.user_name or msg.user_id}: {msg.text}"
+                self._status.update(self._buffer.count, preview)
 
     async def _tick_task(self) -> None:
         """Periodically flush buffer based on window_seconds."""
@@ -98,6 +104,8 @@ class AnalyzerEngine:
             result.reason.value,
             sum(m.char_count() for m in result.messages),
         )
+
+        self._status.set_analyzing()
 
         user_prompt = build_user_prompt(
             result.messages,
@@ -130,6 +138,8 @@ class AnalyzerEngine:
             flush_reason=result.reason,
             channel=self._channel,
         )
+        self._status.reset_window()
+        self._status.update(self._buffer.count)
 
 
 def _make_fallback_analysis(result: FlushResult, raw: str) -> AnalysisResult:
