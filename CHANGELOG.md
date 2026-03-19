@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Changed
+
+- **TUI/plain mode split into separate entry points**
+  - `slack-monitor-tui`: TUI mode — spawns stail internally as an asyncio subprocess;
+    no pipe needed. `--channel` is required. Accepts `--stail-args "..."` to forward
+    extra arguments to stail verbatim.
+  - `slack-monitor`: plain mode — reads stail JSONL from stdin (pipe); `--show-raw`
+    available; `--no-tui` flag removed (plain is the only mode for this command).
+- TUI mode now invokes stail as `stail tail -f -q --format json --channel <ch> [extra]`
+  and terminates the subprocess cleanly on exit (Ctrl+C → graceful stail teardown).
+- stail stderr is relayed to the TUI log panel so startup errors are visible; TUI stays
+  open when stail exits with a non-zero code so the user can read the message.
+
+### Fixed
+
+- Ctrl+C now exits TUI reliably: `ingest` asyncio task is cancelled in the cleanup
+  path (was orphaned), preventing event-loop shutdown from stalling.
+
+---
+
 ## [0.1.0] - 2026-03-20
 
 Initial release.
@@ -15,7 +37,7 @@ Initial release.
   - `buffer.py`: message accumulator with time / count / chars flush triggers
   - `analyzer.py`: asyncio task coordinator (ingest, tick, dispatch)
   - `llm.py`: OpenAI-compatible LLM client with full robustness chain
-  - `formatter.py`: Rich terminal output for plain (`--no-tui`) mode
+  - `formatter.py`: Rich terminal output for plain mode
 - **Textual TUI** (default mode): three-panel live display
   - System status panel: buffer count, next analysis countdown, LLM status
   - Analysis panel: topics, mood/activity, FINDINGS, SITUATION / THIS WIN
@@ -30,7 +52,7 @@ Initial release.
 - **Analysis language override**: `--language` flag (e.g. `--language Japanese`) to force output language; default follows message language automatically
 - **Prior context**: last 3 analysis results are passed as context to the next LLM call for continuity
 - **Live status bar** in plain mode: Rich `Live` display showing buffer state during message accumulation
-- **CLI flags**: `--channel`, `--model`, `--window`, `--language`, `--show-raw`, `--no-tui`, `--debug`
+- **CLI flags**: `--channel`, `--model`, `--window`, `--language`, `--show-raw`, `--debug`
 - 114 unit tests; all LLM tests mock the `OpenAI` client (no real network calls)
 
 ### Fixed

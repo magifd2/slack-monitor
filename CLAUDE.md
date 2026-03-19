@@ -5,9 +5,13 @@ It is enforced in all Claude Code sessions working in this repository.
 
 ## Project Overview
 
-slack-monitor reads Slack channel messages via `stail tail -f --format json` (piped stdin)
+slack-monitor monitors Slack channel messages via [stail](https://github.com/magifd2/stail)
 and uses a local or cloud LLM (OpenAI-compatible API) to produce real-time summaries of
 channel activity.
+
+Two entry points:
+- **`slack-monitor-tui`** — TUI mode. Spawns stail internally as a subprocess.
+- **`slack-monitor`** — Plain mode. Reads stail JSONL from stdin (pipe).
 
 ## Development Rules
 
@@ -64,8 +68,31 @@ channel activity.
 
 ## Architecture
 
+### TUI mode (`slack-monitor-tui`)
+
 ```
-stdin (stail JSONL)
+stail subprocess (spawned internally via asyncio.create_subprocess_exec)
+    ↓  stdout as asyncio.StreamReader
+reader.py       # Parse JSONL → SlackMessage
+    ↓
+buffer.py       # Accumulate with time/count/chars triggers → FlushResult
+    ↓
+analyzer.py     # Coordinate pipeline (asyncio tasks)
+    ↓
+llm.py          # LLM call with robustness: strip think, extract JSON, fallback
+    ↓
+tui.py          # Textual three-panel display (callbacks from analyzer)
+```
+
+stail is invoked as:
+```
+stail tail -f -q --format json --channel <channel> [--stail-args ...]
+```
+
+### Plain mode (`slack-monitor`)
+
+```
+stdin (stail JSONL piped externally)
     ↓
 reader.py       # Parse JSONL → SlackMessage
     ↓
@@ -75,7 +102,7 @@ analyzer.py     # Coordinate pipeline (asyncio tasks)
     ↓
 llm.py          # LLM call with robustness: strip think, extract JSON, fallback
     ↓
-formatter.py    # Rich terminal output
+formatter.py    # Rich terminal output (panels to stdout)
 ```
 
 ## LLM Integration Notes
@@ -101,12 +128,16 @@ uv sync --all-groups
 # Run tests
 uv run pytest
 
-# Run (pipe from stail)
-stail tail -f --format json -c "#general" | uv run slack-monitor --channel general
+# TUI mode (spawns stail internally)
+uv run slack-monitor-tui --channel "#general"
+uv run slack-monitor-tui --channel "#general" --stail-args "--config myconfig.json"
+uv run slack-monitor-tui --channel "#general" --debug
 
-# Run with debug output
+# Plain mode (pipe from stail)
+stail tail -f --format json -c "#general" | uv run slack-monitor
 stail tail -f --format json -c "#general" | uv run slack-monitor --debug --show-raw
 
 # Show help
+uv run slack-monitor-tui --help
 uv run slack-monitor --help
 ```

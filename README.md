@@ -2,21 +2,16 @@
 
 Real-time Slack channel activity summarizer powered by a local or cloud LLM.
 
-Reads Slack messages streamed by [stail](https://github.com/magifd2/stail) and produces
-periodic summaries of what's happening in the channel — topics, sentiment, cumulative
-findings, and situation summary — rendered in a live TUI.
+Monitors a Slack channel via [stail](https://github.com/magifd2/stail) and produces
+periodic summaries of what's happening — topics, sentiment, cumulative findings, and
+situation summary — rendered in a live TUI or printed as Rich panels.
 
-## How It Works
+## Two Commands
 
-```
-stail tail -f --format json -c "#general" | slack-monitor --channel general
-```
-
-1. `stail` streams Slack messages as JSONL to stdout
-2. `slack-monitor` reads stdin, accumulates messages in a time/count window
-3. Each window is sent to an LLM (local or cloud, OpenAI-compatible API)
-4. The LLM returns structured analysis (JSON) including cumulative findings that persist across windows
-5. Results are displayed in a three-panel TUI (status / analysis / message log)
+| Command | Mode | How it works |
+|---------|------|--------------|
+| `slack-monitor-tui` | TUI (default) | Spawns stail internally; live three-panel display |
+| `slack-monitor` | Plain | Reads stail JSONL from stdin; prints Rich panels |
 
 ## Requirements
 
@@ -87,29 +82,58 @@ export SLACK_MONITOR_MODEL="vertex_ai/gemini-2.0-flash"
 
 ## Usage
 
+### TUI mode — `slack-monitor-tui`
+
+Spawns stail internally. No pipe required.
+
 ```bash
-# TUI mode (default) — three-panel live display
-stail tail -f --format json -c "#general" | slack-monitor --channel general
+# Basic usage
+slack-monitor-tui --channel "#general"
 
-# Plain mode — Rich panels printed to stdout
-stail tail -f --format json -c "#general" | slack-monitor --no-tui
+# With extra stail arguments (e.g. custom config)
+slack-monitor-tui --channel "#general" --stail-args "--config myconfig.json"
 
-# Custom window (30 seconds)
-stail tail -f --format json -c "#general" | slack-monitor --window 30
+# Custom analysis window (30 seconds)
+slack-monitor-tui --channel "#general" --window 30
 
 # Force output language
-stail tail -f --format json -c "#general" | slack-monitor --language Japanese
+slack-monitor-tui --channel "#general" --language Japanese
 
-# Debug mode with raw LLM output
-stail tail -f --format json -c "#general" | slack-monitor --debug --show-raw
+# Override LLM model
+slack-monitor-tui --channel "#general" --model vertex_ai/gemini-2.0-flash
 
-# Override model
-stail tail -f --format json -c "#general" | slack-monitor --model vertex_ai/gemini-2.0-flash
+# Debug logging
+slack-monitor-tui --channel "#general" --debug
+```
+
+stail is invoked as:
+```
+stail tail -f -q --format json --channel <channel> [stail-args...]
+```
+
+Press **Ctrl+C** to exit.
+
+### Plain mode — `slack-monitor`
+
+Reads stail JSONL from stdin. Pipe stail output manually.
+
+```bash
+# Basic usage
+stail tail -f --format json -c "#general" | slack-monitor
+
+# With channel label in output
+stail tail -f --format json -c "#general" | slack-monitor --channel general
+
+# Show raw LLM JSON output
+stail tail -f --format json -c "#general" | slack-monitor --show-raw
+
+# Debug mode
+stail tail -f --format json -c "#general" | slack-monitor --debug
 ```
 
 ## Analysis Output
 
-### TUI mode (default)
+### TUI mode
 
 Three-panel layout:
 
@@ -117,7 +141,7 @@ Three-panel layout:
 ┌──────────────────────────────────────────────────────────────┐
 │ slack-monitor  #general                          12:34:56    │  ← header
 ├─────────────────────┬────────────────────────────────────────┤
-│ SYSTEM STATUS       │ 2026-03-19 12:33 → 12:34  12 msgs      │
+│ SYSTEM STATUS       │ 03/19 12:33:01 → 12:34:42  12 msgs     │
 │                     │                                        │
 │ Buffer  0 msgs      │ TOPICS  deployment, rollback           │
 │ Next    45s         │ MOOD    negative   active              │
@@ -141,7 +165,9 @@ Each finding has a severity tag: `[INFO]` `[OK]` `[WARN]` `[ALRT]` `[CRIT]`.
 **SITUATION** is a rolling synthesis of the overall picture across all recent windows.
 **THIS WIN** (shown below SITUATION when different) describes only what changed in the current window.
 
-### Plain mode (`--no-tui`)
+The analysis panel timestamp range reflects the actual message timestamps (first → last post in the window).
+
+### Plain mode
 
 Each analysis window is printed as a Rich panel to stdout.
 
