@@ -1,6 +1,6 @@
 [project]
 name = "slack-monitor"
-version = "0.1.0"
+version = "0.2.0"
 description = "Real-time Slack channel summarizer powered by a local or cloud LLM"
 requires-python = ">=3.12"
 dependencies = [
