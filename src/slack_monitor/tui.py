@@ -15,24 +15,21 @@ Three-panel layout:
 """
 
 import asyncio
-import io
+import logging
 import os
 import sys
-import logging
-from typing import TYPE_CHECKING
+import traceback
 
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal
 from textual.message import Message
-from textual.widgets import Footer, Header, RichLog, Static
+from textual.widgets import Header, RichLog, Static
+from textual.worker import Worker, WorkerState
 
 from slack_monitor.buffer import FlushReason, MessageBuffer
 from slack_monitor.formatter import Formatter
 from slack_monitor.llm import LLMClient
 from slack_monitor.models import AnalysisResult, AppConfig, SlackMessage
-
-if TYPE_CHECKING:
-    from slack_monitor.analyzer import AnalyzerEngine
 
 _log = logging.getLogger(__name__)
 
@@ -134,52 +131,69 @@ class SlackMonitorApp(App):
         self._buffer = buffer
         self._formatter = formatter
         self._channel = channel
-        self._pipe_fd = pipe_fd  # pre-duplicated stdin fd
+        self._pipe_fd = pipe_fd
 
     def compose(self) -> ComposeResult:
-        title = f"slack-monitor  {'#' + self._channel if self._channel else ''}"
+        self.title = f"slack-monitor  {'#' + self._channel if self._channel else ''}"
         yield Header(show_clock=True)
-        self.title = title
         with Horizontal(id="top-pane"):
-            yield Static(_render_status(0, self._config.window_seconds, "waiting"), id="status-panel")
+            yield Static(
+                _render_status(0, self._config.window_seconds, "waiting"),
+                id="status-panel",
+            )
             yield Static(_render_no_analysis(), id="analysis-panel")
         yield RichLog(id="log-panel", highlight=True, markup=True, auto_scroll=True)
 
     def on_mount(self) -> None:
-        self.run_worker(self._run_engine(), exclusive=True, thread=False)
+        # exit_on_error=False: errors are shown in the log panel instead of crashing
+        self.run_worker(self._run_engine(), exclusive=True, exit_on_error=False)
 
     async def _run_engine(self) -> None:
         """Start the analyzer pipeline inside Textual's event loop."""
-        from slack_monitor.analyzer import AnalyzerEngine
+        log = self.query_one("#log-panel", RichLog)
+        try:
+            from slack_monitor.analyzer import AnalyzerEngine
 
-        loop = asyncio.get_event_loop()
-        reader = asyncio.StreamReader()
-        protocol = asyncio.StreamReaderProtocol(reader)
+            # Must use get_running_loop() inside an async context (not get_event_loop())
+            loop = asyncio.get_running_loop()
+            reader = asyncio.StreamReader()
+            protocol = asyncio.StreamReaderProtocol(reader)
 
-        if self._pipe_fd is not None:
-            # Use the pre-duplicated fd (Textual may have taken over sys.stdin)
-            pipe_file = open(self._pipe_fd, "rb", buffering=0)
-            await loop.connect_read_pipe(lambda: protocol, pipe_file)
-        else:
-            await loop.connect_read_pipe(lambda: protocol, sys.stdin)
+            if self._pipe_fd is not None:
+                pipe_file = open(self._pipe_fd, "rb", buffering=0)
+                await loop.connect_read_pipe(lambda: protocol, pipe_file)
+            else:
+                await loop.connect_read_pipe(lambda: protocol, sys.stdin.buffer)
 
-        engine = AnalyzerEngine(
-            config=self._config,
-            llm=self._llm,
-            buffer=self._buffer,
-            formatter=self._formatter,
-            channel=self._channel,
-            on_message=self._cb_message,
-            on_analysis=self._cb_analysis,
-            on_status=self._cb_status,
-            status_bar=None,  # disable stderr StatusBar in TUI mode
-        )
+            engine = AnalyzerEngine(
+                config=self._config,
+                llm=self._llm,
+                buffer=self._buffer,
+                formatter=self._formatter,
+                channel=self._channel,
+                on_message=self._cb_message,
+                on_analysis=self._cb_analysis,
+                on_status=self._cb_status,
+                status_bar=None,  # stderr StatusBar disabled in TUI mode
+            )
 
-        await engine.run(reader)
-        # stdin EOF → graceful shutdown
-        self.exit()
+            await engine.run(reader)
+            self.exit()
 
-    # --- Callbacks (called from engine coroutines on the same event loop) ---
+        except Exception as e:
+            log.write(f"[bold red]ERROR:[/bold red] {e}")
+            for line in traceback.format_exc().splitlines():
+                log.write(f"[dim]{line}[/dim]")
+            _log.exception("Engine crashed")
+            # Don't exit — keep TUI open so user can read the error
+
+    def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
+        """Show worker errors in the log panel instead of silently exiting."""
+        if event.state == WorkerState.ERROR:
+            log = self.query_one("#log-panel", RichLog)
+            log.write(f"[bold red]Worker failed:[/bold red] {event.worker}")
+
+    # --- Callbacks (called from engine coroutines — same event loop as app) ---
 
     def _cb_message(self, msg: SlackMessage) -> None:
         self.post_message(_MsgReceived(msg))
@@ -204,17 +218,17 @@ class SlackMonitorApp(App):
         )
 
     def on__analysis_ready(self, event: _AnalysisReady) -> None:
-        panel = self.query_one("#analysis-panel", Static)
-        panel.update(_render_analysis(event.result))
+        self.query_one("#analysis-panel", Static).update(
+            _render_analysis(event.result)
+        )
 
     def on__status_update(self, event: _StatusUpdate) -> None:
-        panel = self.query_one("#status-panel", Static)
-        panel.update(
+        self.query_one("#status-panel", Static).update(
             _render_status(event.count, event.next_in_sec, event.llm_status)
         )
 
 
-# --- Pure render helpers (no widget state) ---
+# --- Pure render helpers ---
 
 def _render_status(count: int, next_in_sec: int, llm_status: str) -> str:
     status_label = _STATUS_LABEL.get(llm_status, llm_status)
@@ -243,20 +257,16 @@ def _render_analysis(result: AnalysisResult) -> str:
         f"[{activity_style}]{result.activity_level.value}[/{activity_style}]",
         "",
     ]
-
     if result.topics:
         lines.append(f"[bold]TOPICS[/bold]  {', '.join(result.topics)}")
-
     lines.append(
         f"[bold]MOOD  [/bold]  [{sentiment_style}]{result.sentiment}[/{sentiment_style}]"
     )
-
     if result.key_events:
         lines.append("")
         lines.append("[bold]EVENTS[/bold]")
         for ev in result.key_events:
             lines.append(f"  • {ev}")
-
     if result.summary:
         lines.append("")
         lines.append(result.summary)
@@ -265,7 +275,6 @@ def _render_analysis(result: AnalysisResult) -> str:
 
 
 def _short_time(ts: str) -> str:
-    """Extract HH:MM:SS from RFC3339 or return as-is."""
     if "T" in ts:
         time_part = ts.split("T", 1)[1]
         return time_part.split("Z")[0].split("+")[0].split("-")[0][:8]
