@@ -1,0 +1,47 @@
+[
+  {
+    "user_id": "U001",
+    "user_name": "alice",
+    "post_type": "user",
+    "timestamp": "2026-03-19T10:44:00Z",
+    "timestamp_unix": "1742377440.000100",
+    "text": "Good morning everyone!",
+    "is_reply": false
+  },
+  {
+    "user_id": "U002",
+    "user_name": "bob",
+    "post_type": "user",
+    "timestamp": "2026-03-19T10:44:10Z",
+    "timestamp_unix": "1742377450.000200",
+    "text": "Morning! Has anyone seen the deploy status?",
+    "is_reply": false
+  },
+  {
+    "user_id": "U001",
+    "user_name": "alice",
+    "post_type": "user",
+    "timestamp": "2026-03-19T10:44:20Z",
+    "timestamp_unix": "1742377460.000300",
+    "text": "The deploy looks good. All checks passing.",
+    "is_reply": true
+  },
+  {
+    "user_id": "U003",
+    "user_name": "carol",
+    "post_type": "bot",
+    "timestamp": "2026-03-19T10:44:30Z",
+    "timestamp_unix": "1742377470.000400",
+    "text": "Deploy #347 completed successfully.",
+    "is_reply": false
+  },
+  {
+    "user_id": "U002",
+    "user_name": "bob",
+    "post_type": "user",
+    "timestamp": "2026-03-19T10:44:40Z",
+    "timestamp_unix": "1742377480.000500",
+    "text": "Great! Closing the incident.",
+    "is_reply": false
+  }
+]
