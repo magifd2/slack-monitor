@@ -184,7 +184,7 @@ class SlackMonitorApp(App):
                 proc = await asyncio.create_subprocess_exec(
                     *cmd,
                     stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.PIPE,
                 )
             except FileNotFoundError:
                 log.write("[bold red]ERROR:[/bold red] 'stail' not found on PATH.")
@@ -196,7 +196,17 @@ class SlackMonitorApp(App):
 
             self._stail_proc = proc
             assert proc.stdout is not None
+            assert proc.stderr is not None
             reader: asyncio.StreamReader = proc.stdout
+
+            # Relay stail stderr to the log panel so startup errors are visible.
+            async def _relay_stderr() -> None:
+                async for line in proc.stderr:
+                    text = line.decode("utf-8", errors="replace").rstrip()
+                    if text:
+                        log.write(f"[dim yellow][stail] {text}[/dim yellow]")
+
+            stderr_task = asyncio.create_task(_relay_stderr(), name="stail-stderr")
 
             engine = AnalyzerEngine(
                 config=self._config,
@@ -211,7 +221,15 @@ class SlackMonitorApp(App):
             )
 
             await engine.run(reader)
-            # stail exited (EOF) — exit TUI too
+            stderr_task.cancel()
+
+            rc = proc.returncode
+            if rc is not None and rc != 0:
+                log.write(f"[bold red]stail exited with code {rc}[/bold red]")
+                log.write("[dim]Check the command above. Press Ctrl+C to quit.[/dim]")
+                return  # stay open so user can read the error
+
+            # stail exited cleanly (EOF) — exit TUI too
             self.exit()
 
         except asyncio.CancelledError:
