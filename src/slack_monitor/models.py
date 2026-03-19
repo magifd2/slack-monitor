@@ -92,10 +92,12 @@ class AppConfig(BaseModel):
 
     # Buffer / windowing settings
     window_seconds: int = 60
-    max_messages: int = 50
-    max_chars: int = 180_000  # ~45K tokens headroom for 64K context models
+    trigger_messages: int = 10   # Trigger analysis when buffer reaches this count
+    max_messages: int = 50       # Hard overflow cap (safety net)
+    max_chars: int = 180_000     # ~45K tokens headroom for 64K context models
 
-    # Output settings
+    # Output / analysis settings
+    analysis_language: str = "auto"  # "auto" follows message language; or e.g. "Japanese"
     show_raw: bool = False
     timezone: str = "local"
 

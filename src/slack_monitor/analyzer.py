@@ -22,7 +22,7 @@ from slack_monitor.buffer import FlushReason, FlushResult, MessageBuffer
 from slack_monitor.formatter import Formatter, StatusBar
 from slack_monitor.llm import LLMClient
 from slack_monitor.models import AnalysisResult, AppConfig, SlackMessage
-from slack_monitor.prompts import SYSTEM_PROMPT, build_user_prompt
+from slack_monitor.prompts import build_system_prompt, build_user_prompt
 from slack_monitor.reader import read_messages
 
 _log = logging.getLogger(__name__)
@@ -172,10 +172,11 @@ class AnalyzerEngine:
         )
 
         # Use get_running_loop() — correct within an async context (Python 3.12+)
+        system_prompt = build_system_prompt(self._config.analysis_language)
         loop = asyncio.get_running_loop()
         analysis, raw = await loop.run_in_executor(
             None,
-            lambda: self._llm.analyze(SYSTEM_PROMPT, user_prompt),
+            lambda: self._llm.analyze(system_prompt, user_prompt),
         )
 
         if analysis is None:

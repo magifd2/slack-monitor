@@ -79,10 +79,6 @@ class _StatusUpdate(Message):
 class SlackMonitorApp(App):
     """Main TUI application for slack-monitor."""
 
-    # Disable mouse tracking — we don't need mouse interaction and enabling
-    # it can cause raw escape codes to leak into the terminal display
-    MOUSE_TRACKING = False
-
     CSS = """
     Screen {
         layout: vertical;

@@ -61,6 +61,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override analysis window duration in seconds",
     )
     p.add_argument(
+        "--language",
+        default=None,
+        metavar="LANG",
+        help='Analysis output language (e.g. "Japanese", "English"). Default: auto (follows messages)',
+    )
+    p.add_argument(
         "--show-raw",
         action="store_true",
         default=False,
@@ -89,6 +95,8 @@ def _build_config(args: argparse.Namespace) -> AppConfig:
         overrides["window_seconds"] = args.window
     if args.show_raw:
         overrides["show_raw"] = True
+    if getattr(args, "language", None) is not None:
+        overrides["analysis_language"] = args.language
     if overrides:
         config = config.model_copy(update=overrides)
     return config
@@ -132,7 +140,7 @@ def _run_tui(args: argparse.Namespace) -> None:
         channel=args.channel,
         pipe_fd=pipe_fd,
     )
-    app.run()
+    app.run(mouse=False)
 
 
 def main() -> None:

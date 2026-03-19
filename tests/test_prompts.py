@@ -3,7 +3,7 @@
 import pytest
 
 from slack_monitor.models import SlackMessage
-from slack_monitor.prompts import SYSTEM_PROMPT, _format_timestamp, build_user_prompt
+from slack_monitor.prompts import build_system_prompt, _format_timestamp, build_user_prompt
 from tests.conftest import make_message
 
 
@@ -64,12 +64,22 @@ class TestBuildUserPrompt:
         assert "JSON" in prompt
 
     def test_system_prompt_contains_schema(self):
-        assert "topics" in SYSTEM_PROMPT
-        assert "sentiment" in SYSTEM_PROMPT
-        assert "activity_level" in SYSTEM_PROMPT
-        assert "key_events" in SYSTEM_PROMPT
-        assert "summary" in SYSTEM_PROMPT
+        prompt = build_system_prompt()
+        assert "topics" in prompt
+        assert "sentiment" in prompt
+        assert "activity_level" in prompt
+        assert "key_events" in prompt
+        assert "summary" in prompt
 
     def test_injection_protection_in_system_prompt(self):
-        """System prompt should warn about prompt injection in messages."""
-        assert "<messages>" in SYSTEM_PROMPT or "injection" in SYSTEM_PROMPT.lower()
+        prompt = build_system_prompt()
+        assert "<messages>" in prompt or "injection" in prompt.lower()
+
+    def test_system_prompt_auto_language(self):
+        prompt = build_system_prompt("auto")
+        assert "same language" in prompt
+
+    def test_system_prompt_explicit_language(self):
+        prompt = build_system_prompt("Japanese")
+        assert "Japanese" in prompt
+        assert "same language" not in prompt

@@ -65,6 +65,11 @@ class MessageBuffer:
             )
             return self.flush(FlushReason.CHARS)
 
+        # Responsive trigger: start analysis as soon as enough messages accumulated
+        if len(self._messages) >= self._config.trigger_messages:
+            return self.flush(FlushReason.COUNT)
+
+        # Safety net: never let the buffer grow beyond max_messages
         if len(self._messages) >= self._config.max_messages:
             return self.flush(FlushReason.COUNT)
 

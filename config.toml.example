@@ -26,14 +26,21 @@ temperature = 0.3
 # Flush buffer after this many seconds (time-based trigger)
 window_seconds = 60
 
-# Flush buffer when this many messages are accumulated (count-based trigger)
+# Trigger analysis when this many messages are buffered (responsive count trigger)
+# Lower values = faster response to activity bursts
+trigger_messages = 10
+
+# Hard overflow cap — force flush before context window is exceeded
 max_messages = 50
 
 # Hard character ceiling for buffered messages (~45K token headroom for 64K context models)
-# Oldest messages are dropped if this is exceeded
 max_chars = 180000
 
 [output]
+# Language for the analysis summary. "auto" follows the language of the messages.
+# Examples: "Japanese", "English", "Korean"
+analysis_language = "auto"
+
 # Print raw LLM JSON response below each analysis panel (useful for debugging)
 show_raw = false
 

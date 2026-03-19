@@ -15,6 +15,7 @@ def make_config(**kwargs) -> AppConfig:
         "api_key": "test",
         "model": "test",
         "window_seconds": 60,
+        "trigger_messages": 3,  # lower than default for test speed
         "max_messages": 5,
         "max_chars": 1000,
     }
@@ -30,7 +31,7 @@ class TestMessageBuffer:
         assert buf.count == 1
 
     def test_count_trigger_flush(self):
-        buf = MessageBuffer(make_config(max_messages=3))
+        buf = MessageBuffer(make_config(trigger_messages=3, max_messages=10))
         buf.add(make_message("msg1"))
         buf.add(make_message("msg2"))
         result = buf.add(make_message("msg3"))

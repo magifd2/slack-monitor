@@ -27,8 +27,10 @@ _ENV_MAP: dict[str, tuple[str, type]] = {
     "SLACK_MONITOR_MAX_TOKENS": ("max_tokens", int),
     "SLACK_MONITOR_TEMPERATURE": ("temperature", float),
     "SLACK_MONITOR_WINDOW_SECONDS": ("window_seconds", int),
+    "SLACK_MONITOR_TRIGGER_MESSAGES": ("trigger_messages", int),
     "SLACK_MONITOR_MAX_MESSAGES": ("max_messages", int),
     "SLACK_MONITOR_MAX_CHARS": ("max_chars", int),
+    "SLACK_MONITOR_LANGUAGE": ("analysis_language", str),
     "SLACK_MONITOR_SHOW_RAW": ("show_raw", bool),
     "SLACK_MONITOR_TIMEZONE": ("timezone", str),
 }
