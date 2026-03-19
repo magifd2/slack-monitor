@@ -12,13 +12,16 @@ Three-panel layout:
 │  MESSAGE LOG (scrollable)                            │ ← log pane
 │  HH:MM:SS @user  message text                       │
 └──────────────────────────────────────────────────────┘
+
+TUI mode spawns stail internally as a subprocess:
+    stail tail -f -q --format json --channel <channel> [extra_stail_args...]
+
+This avoids all stdin/pipe conflicts with Textual's terminal management.
 """
 
 import asyncio
 import logging
-import os
-import sys
-import threading
+import shlex
 import traceback
 from datetime import datetime, timezone
 
@@ -87,6 +90,8 @@ class _StatusUpdate(Message):
 class SlackMonitorApp(App):
     """Main TUI application for slack-monitor."""
 
+    BINDINGS = [("ctrl+c", "quit", "Quit")]
+
     CSS = """
     Screen {
         layout: vertical;
@@ -133,7 +138,7 @@ class SlackMonitorApp(App):
         buffer: MessageBuffer,
         formatter: Formatter,
         channel: str = "",
-        pipe_fd: int | None = None,
+        stail_args: str = "",
     ) -> None:
         super().__init__()
         self._config = config
@@ -141,7 +146,8 @@ class SlackMonitorApp(App):
         self._buffer = buffer
         self._formatter = formatter
         self._channel = channel
-        self._pipe_fd = pipe_fd
+        self._stail_args = stail_args
+        self._stail_proc: asyncio.subprocess.Process | None = None
 
     def compose(self) -> ComposeResult:
         self.title = f"slack-monitor  {'#' + self._channel if self._channel else ''}"
@@ -155,48 +161,42 @@ class SlackMonitorApp(App):
         yield RichLog(id="log-panel", highlight=True, markup=True, auto_scroll=True)
 
     def on_mount(self) -> None:
-        # Textual enables terminal focus-event reporting (ESC[?1004h) during
-        # startup.  When the terminal sends ESC[I (focus-in) during a repaint
-        # the sequence can leak into the display as '^[[I' at the cursor
-        # position.  Disable focus reporting immediately after mount.
-        try:
-            with open("/dev/tty", "wb", buffering=0) as _tty:
-                _tty.write(b"\x1b[?1004l")
-        except OSError:
-            pass
-        # exit_on_error=False: errors are shown in the log panel instead of crashing
         self.run_worker(self._run_engine(), exclusive=True, exit_on_error=False)
 
     async def _run_engine(self) -> None:
-        """Start the analyzer pipeline inside Textual's event loop."""
+        """Spawn stail and run the analyzer pipeline inside Textual's event loop."""
         log = self.query_one("#log-panel", RichLog)
         try:
             from slack_monitor.analyzer import AnalyzerEngine
 
-            loop = asyncio.get_running_loop()
-            reader = asyncio.StreamReader()
+            # Build stail command
+            cmd = [
+                "stail", "tail", "-f", "-q",
+                "--format", "json",
+                "--channel", self._channel,
+            ]
+            if self._stail_args:
+                cmd.extend(shlex.split(self._stail_args))
 
-            # Read from the stail pipe in a background thread and feed into
-            # the asyncio StreamReader via call_soon_threadsafe.
-            # This avoids connect_read_pipe conflicts with Textual's own
-            # event loop and file descriptor management.
-            fd = self._pipe_fd if self._pipe_fd is not None else os.dup(sys.stdin.fileno())
+            _log.debug("Spawning stail: %s", " ".join(cmd))
 
-            def _pipe_reader_thread() -> None:
-                try:
-                    with open(fd, "rb", buffering=0) as pipe:
-                        while True:
-                            data = pipe.read(4096)
-                            if not data:
-                                break
-                            loop.call_soon_threadsafe(reader.feed_data, data)
-                except Exception as exc:
-                    loop.call_soon_threadsafe(reader.set_exception, exc)
-                finally:
-                    loop.call_soon_threadsafe(reader.feed_eof)
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+            except FileNotFoundError:
+                log.write("[bold red]ERROR:[/bold red] 'stail' not found on PATH.")
+                log.write("[dim]Install stail or check your PATH.[/dim]")
+                return
+            except OSError as e:
+                log.write(f"[bold red]ERROR:[/bold red] Failed to start stail: {e}")
+                return
 
-            t = threading.Thread(target=_pipe_reader_thread, daemon=True, name="pipe-reader")
-            t.start()
+            self._stail_proc = proc
+            assert proc.stdout is not None
+            reader: asyncio.StreamReader = proc.stdout
 
             engine = AnalyzerEngine(
                 config=self._config,
@@ -211,19 +211,34 @@ class SlackMonitorApp(App):
             )
 
             await engine.run(reader)
+            # stail exited (EOF) — exit TUI too
             self.exit()
 
         except asyncio.CancelledError:
-            pass  # Normal shutdown (e.g. Ctrl+C via Textual)
+            pass  # Normal shutdown (Ctrl+C)
         except Exception as e:
             log.write(f"[bold red]ERROR:[/bold red] {e}")
             for line in traceback.format_exc().splitlines():
                 log.write(f"[dim]{line}[/dim]")
             _log.exception("Engine crashed")
-            # Don't exit — keep TUI open so user can read the error
+        finally:
+            await self._terminate_stail()
+
+    async def _terminate_stail(self) -> None:
+        """Gracefully terminate the stail subprocess."""
+        proc = self._stail_proc
+        if proc is None or proc.returncode is not None:
+            return
+        try:
+            proc.terminate()
+            await asyncio.wait_for(proc.wait(), timeout=3.0)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+        except Exception as e:
+            _log.warning("Error terminating stail: %s", e)
 
     def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
-        """Show worker errors in the log panel instead of silently exiting."""
         if event.state == WorkerState.ERROR:
             log = self.query_one("#log-panel", RichLog)
             log.write(f"[bold red]Worker failed:[/bold red] {event.worker}")
@@ -334,7 +349,6 @@ def _local_datetime(ts: str) -> str:
             dt = datetime.fromisoformat(ts)
         return dt.astimezone().strftime("%m/%d %H:%M:%S")
     except (ValueError, TypeError):
-        # Fallback: extract time portion as-is
         if "T" in ts:
             return ts.split("T", 1)[1][:8]
         return ts[:19]

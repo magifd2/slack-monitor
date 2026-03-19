@@ -12,6 +12,7 @@ dependencies = [
 
 [project.scripts]
 slack-monitor = "slack_monitor.main:main"
+slack-monitor-tui = "slack_monitor.main:tui_main"
 
 [build-system]
 requires = ["hatchling"]

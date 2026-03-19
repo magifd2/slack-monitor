@@ -93,9 +93,10 @@ class AnalyzerEngine:
         except Exception as e:
             _log.error("_ingest_task terminated with error: %s", e, exc_info=True)
         finally:
+            ingest.cancel()
             tick.cancel()
             dispatch.cancel()
-            await asyncio.gather(tick, dispatch, return_exceptions=True)
+            await asyncio.gather(ingest, tick, dispatch, return_exceptions=True)
             if self._status is not None:
                 self._status.stop()
 
