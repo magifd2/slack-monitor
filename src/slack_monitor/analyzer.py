@@ -67,13 +67,7 @@ class AnalyzerEngine:
         return max(0, self._config.window_seconds - elapsed)
 
     async def run(self, stream: asyncio.StreamReader) -> None:
-        """Start the analysis pipeline.
-
-        Runs three concurrent tasks:
-        - _ingest_task: reads messages and handles count/chars flushes
-        - _tick_task: drives time-based flushes
-        - _dispatch_task: serializes LLM calls from the queue
-        """
+        """Start the analysis pipeline."""
         if self._status is not None:
             self._status.start()
 
@@ -85,6 +79,8 @@ class AnalyzerEngine:
             await ingest
         except asyncio.CancelledError:
             pass
+        except Exception as e:
+            _log.error("_ingest_task terminated with error: %s", e, exc_info=True)
         finally:
             tick.cancel()
             dispatch.cancel()
@@ -99,28 +95,55 @@ class AnalyzerEngine:
     async def _ingest_task(self, stream: asyncio.StreamReader) -> None:
         """Read messages from stream and add to buffer."""
         async for msg in read_messages(stream):
-            flush_result = self._buffer.add(msg)
+            # Add to buffer; returns FlushResult if a threshold was hit
+            try:
+                flush_result = self._buffer.add(msg)
+            except Exception as e:
+                _log.error("buffer.add failed (skipping message): %s", e)
+                continue
+
             if flush_result is not None:
                 await self._queue.put(flush_result)
+                # Note: on_message is NOT called for the message that triggered
+                # the flush — it will appear in the analysis window instead.
             else:
+                # Message buffered; notify TUI and status bar
                 if self._on_message is not None:
-                    self._on_message(msg)
+                    try:
+                        self._on_message(msg)
+                    except Exception as e:
+                        _log.error("on_message callback raised (ignoring): %s", e)
                 preview = f"@{msg.user_name or msg.user_id}: {msg.text}"
                 if self._status is not None:
                     self._status.update(self._buffer.count, preview)
                 if self._on_status is not None:
-                    self._on_status(self._buffer.count, self._next_in_sec(), "waiting")
+                    try:
+                        self._on_status(self._buffer.count, self._next_in_sec(), "waiting")
+                    except Exception as e:
+                        _log.error("on_status callback raised (ignoring): %s", e)
 
     async def _tick_task(self) -> None:
         """Periodically flush buffer based on window_seconds."""
         await self._buffer.ticker(self._queue)
 
     async def _dispatch_task(self) -> None:
-        """Serialize LLM calls from the queue."""
+        """Serialize LLM calls from the queue. Survives individual flush errors."""
         while True:
             result = await self._queue.get()
             try:
                 await self._process_flush(result)
+            except asyncio.CancelledError:
+                self._queue.task_done()
+                raise
+            except Exception as e:
+                # Log but keep the loop alive — don't let one bad flush kill all future analyses
+                _log.error("_process_flush failed (continuing): %s", e, exc_info=True)
+                # Reset status to waiting so the TUI doesn't stay stuck on "analyzing..."
+                if self._on_status is not None:
+                    try:
+                        self._on_status(self._buffer.count, self._next_in_sec(), "waiting")
+                    except Exception:
+                        pass
             finally:
                 self._queue.task_done()
 
@@ -148,7 +171,9 @@ class AnalyzerEngine:
             channel_hint=self._channel,
         )
 
-        analysis, raw = await asyncio.get_event_loop().run_in_executor(
+        # Use get_running_loop() — correct within an async context (Python 3.12+)
+        loop = asyncio.get_running_loop()
+        analysis, raw = await loop.run_in_executor(
             None,
             lambda: self._llm.analyze(SYSTEM_PROMPT, user_prompt),
         )
@@ -167,7 +192,10 @@ class AnalyzerEngine:
 
         if self._on_analysis is not None:
             # TUI path: notify via callback (do NOT also write to stdout)
-            self._on_analysis(analysis, result.reason)
+            try:
+                self._on_analysis(analysis, result.reason)
+            except Exception as e:
+                _log.error("on_analysis callback raised: %s", e)
         else:
             # no-tui path: print Rich panel to stdout
             self._formatter.print_analysis(
@@ -181,7 +209,10 @@ class AnalyzerEngine:
             self._status.reset_window()
             self._status.update(self._buffer.count)
         if self._on_status is not None:
-            self._on_status(self._buffer.count, self._next_in_sec(), "waiting")
+            try:
+                self._on_status(self._buffer.count, self._next_in_sec(), "waiting")
+            except Exception as e:
+                _log.error("on_status callback raised: %s", e)
 
 
 def _make_fallback_analysis(result: FlushResult, raw: str) -> AnalysisResult:
