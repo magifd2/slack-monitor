@@ -165,16 +165,16 @@ class AnalyzerEngine:
                 }
             )
 
-        # no-tui path: print Rich panel to stdout
-        self._formatter.print_analysis(
-            analysis,
-            flush_reason=result.reason,
-            channel=self._channel,
-        )
-
-        # TUI path: notify via callback
         if self._on_analysis is not None:
+            # TUI path: notify via callback (do NOT also write to stdout)
             self._on_analysis(analysis, result.reason)
+        else:
+            # no-tui path: print Rich panel to stdout
+            self._formatter.print_analysis(
+                analysis,
+                flush_reason=result.reason,
+                channel=self._channel,
+            )
 
         self._window_start_dt = datetime.now(timezone.utc)
         if self._status is not None:
