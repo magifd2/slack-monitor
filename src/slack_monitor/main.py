@@ -132,6 +132,13 @@ def _run_tui(args: argparse.Namespace) -> None:
     # but os.dup ensures we hold a stable fd regardless.
     pipe_fd = os.dup(sys.stdin.fileno())
 
+    # Redirect fd 0 to /dev/null so neither Textual nor any other code can
+    # accidentally consume bytes from the stail pipe. Our _pipe_reader_thread
+    # in tui.py reads exclusively via pipe_fd.
+    devnull_fd = os.open("/dev/null", os.O_RDONLY)
+    os.dup2(devnull_fd, sys.stdin.fileno())
+    os.close(devnull_fd)
+
     app = SlackMonitorApp(
         config=config,
         llm=LLMClient(config),

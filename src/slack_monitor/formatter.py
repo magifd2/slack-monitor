@@ -10,7 +10,7 @@ from rich.spinner import Spinner
 from rich.text import Text
 
 from slack_monitor.buffer import FlushReason
-from slack_monitor.models import ActivityLevel, AnalysisResult, AppConfig
+from slack_monitor.models import ActivityLevel, AnalysisResult, AppConfig, FindingSeverity
 
 _ACTIVITY_COLORS = {
     ActivityLevel.QUIET: "dim",
@@ -26,11 +26,35 @@ _SENTIMENT_COLORS = {
     "mixed": "yellow",
 }
 
+_FINDING_TAG = {
+    FindingSeverity.INFO:     ("[INFO]",  "dim"),
+    FindingSeverity.POSITIVE: ("[OK]  ",  "green"),
+    FindingSeverity.WARNING:  ("[WARN]",  "yellow"),
+    FindingSeverity.NEGATIVE: ("[ALRT]",  "red"),
+    FindingSeverity.CRITICAL: ("[CRIT]",  "bold red"),
+}
+
 _FLUSH_REASON_LABELS = {
     FlushReason.TIME: "⏱ time",
     FlushReason.COUNT: "# count",
     FlushReason.CHARS: "⚠ chars",
 }
+
+
+def _short_time(ts: str) -> str:
+    """Convert RFC3339/UTC timestamp to local HH:MM string."""
+    if not ts:
+        return ""
+    try:
+        if ts.endswith("Z"):
+            dt = datetime.fromisoformat(ts[:-1] + "+00:00")
+        else:
+            dt = datetime.fromisoformat(ts)
+        return dt.astimezone().strftime("%H:%M")
+    except (ValueError, TypeError):
+        if "T" in ts:
+            return ts.split("T", 1)[1][:5]
+        return ts[:5]
 
 
 class StatusBar:
@@ -145,29 +169,51 @@ class Formatter:
     def _build_body(self, result: AnalysisResult) -> Text:
         t = Text()
 
-        # Topics
+        # Topics / mood (compact header line)
+        sentiment_color = _SENTIMENT_COLORS.get(result.sentiment, "")
+        activity_color = _ACTIVITY_COLORS.get(result.activity_level, "")
         if result.topics:
-            t.append("TOPICS:  ", style="bold")
+            t.append("TOPICS:    ", style="bold")
             t.append(", ".join(result.topics))
             t.append("\n")
-
-        # Sentiment
-        sentiment_color = _SENTIMENT_COLORS.get(result.sentiment, "")
-        t.append("MOOD:    ", style="bold")
+        t.append("MOOD:      ", style="bold")
         t.append(result.sentiment, style=sentiment_color)
+        t.append("   ")
+        t.append(result.activity_level.value, style=activity_color)
         t.append("\n")
 
-        # Key events
+        # Cumulative findings — the "what we know" list
+        if result.findings:
+            t.append("\n")
+            t.append("FINDINGS:", style="bold yellow")
+            t.append("\n")
+            for finding in result.findings:
+                tag, style = _FINDING_TAG.get(finding.severity, ("[INFO]", "dim"))
+                t.append(f"  {tag} ", style=style)
+                t.append(finding.text)
+                t.append("\n")
+
+        # New events this window
         if result.key_events:
-            t.append("EVENTS:", style="bold")
+            t.append("\n")
+            t.append("NEW:", style="bold")
             t.append("\n")
             for event in result.key_events:
-                t.append(f"  • {event}\n")
-
-        # Summary
-        if result.summary:
-            if result.topics or result.key_events:
+                t.append(f"  • {event}")
                 t.append("\n")
+
+        # Ongoing situation prose
+        if result.ongoing_summary:
+            t.append("\n")
+            t.append("SITUATION: ", style="bold cyan")
+            t.append(result.ongoing_summary)
+        elif result.summary:
+            t.append("\n")
             t.append(result.summary)
+
+        if result.ongoing_summary and result.summary and result.summary != result.ongoing_summary:
+            t.append("\n\n")
+            t.append("THIS WIN:  ", style="bold dim")
+            t.append(result.summary, style="dim")
 
         return t

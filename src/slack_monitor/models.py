@@ -1,9 +1,36 @@
 """Core data models for slack-monitor."""
 
 from enum import Enum
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field, field_validator
+
+
+class FindingSeverity(str, Enum):
+    INFO = "info"          # neutral background fact
+    POSITIVE = "positive"  # resolved, improvement, good news
+    WARNING = "warning"    # potential issue, watch this
+    NEGATIVE = "negative"  # confirmed problem or failure
+    CRITICAL = "critical"  # urgent, immediate action required
+
+
+class Finding(BaseModel):
+    text: str
+    severity: FindingSeverity = FindingSeverity.INFO
+
+    model_config = {"extra": "ignore"}
+
+    @field_validator("severity", mode="before")
+    @classmethod
+    def coerce_severity(cls, v: object) -> FindingSeverity:
+        if isinstance(v, FindingSeverity):
+            return v
+        if isinstance(v, str):
+            try:
+                return FindingSeverity(v.lower())
+            except ValueError:
+                return FindingSeverity.INFO
+        return FindingSeverity.INFO
 
 
 class PostType(str, Enum):
@@ -74,8 +101,24 @@ class AnalysisResult(BaseModel):
     sentiment: str = "neutral"
     activity_level: ActivityLevel = ActivityLevel.NORMAL
     key_events: list[str] = Field(default_factory=list)
-    summary: str = ""
+    findings: list[Finding] = Field(default_factory=list)  # cumulative known facts
+    summary: str = ""          # what happened in THIS window
+    ongoing_summary: str = ""  # cumulative synthesis across all windows
     raw_llm_output: Optional[str] = None  # stored for debug output
+
+    @field_validator("findings", mode="before")
+    @classmethod
+    def coerce_findings(cls, v: Any) -> list[Any]:
+        """Accept plain strings from LLM in addition to {text, severity} dicts."""
+        if not isinstance(v, list):
+            return []
+        result = []
+        for item in v:
+            if isinstance(item, str):
+                result.append({"text": item, "severity": "info"})
+            elif isinstance(item, dict):
+                result.append(item)
+        return result
 
     model_config = {"extra": "ignore"}
 

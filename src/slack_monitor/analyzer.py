@@ -14,6 +14,7 @@ Callbacks (all optional) allow the TUI to receive events without polling:
 """
 
 import asyncio
+import collections
 import logging
 from datetime import datetime, timezone
 from typing import Callable, Optional
@@ -61,6 +62,13 @@ class AnalyzerEngine:
             status_bar if status_bar is not None else StatusBar(config.window_seconds)
         )
         self._window_start_dt: datetime = datetime.now(timezone.utc)
+        # Tick timer starts only after the first message arrives, so that
+        # historical messages sent by stail at startup are fully buffered
+        # before the first time-based flush fires.
+        self._first_message: asyncio.Event = asyncio.Event()
+        # Rolling buffer of recent analyses passed as context to the next LLM call.
+        # Keeps the last 3 windows so the LLM understands ongoing situations.
+        self._recent_analyses: collections.deque[AnalysisResult] = collections.deque(maxlen=3)
 
     def _next_in_sec(self) -> int:
         elapsed = (datetime.now(timezone.utc) - self._window_start_dt).seconds
@@ -95,6 +103,9 @@ class AnalyzerEngine:
     async def _ingest_task(self, stream: asyncio.StreamReader) -> None:
         """Read messages from stream and add to buffer."""
         async for msg in read_messages(stream):
+            # Signal the tick task to start its timer on the first message.
+            self._first_message.set()
+
             # Add to buffer; returns FlushResult if a threshold was hit
             try:
                 flush_result = self._buffer.add(msg)
@@ -103,9 +114,12 @@ class AnalyzerEngine:
                 continue
 
             if flush_result is not None:
+                if self._on_message is not None:
+                    try:
+                        self._on_message(msg)
+                    except Exception as e:
+                        _log.error("on_message callback raised (ignoring): %s", e)
                 await self._queue.put(flush_result)
-                # Note: on_message is NOT called for the message that triggered
-                # the flush — it will appear in the analysis window instead.
             else:
                 # Message buffered; notify TUI and status bar
                 if self._on_message is not None:
@@ -123,7 +137,13 @@ class AnalyzerEngine:
                         _log.error("on_status callback raised (ignoring): %s", e)
 
     async def _tick_task(self) -> None:
-        """Periodically flush buffer based on window_seconds."""
+        """Periodically flush buffer based on window_seconds.
+
+        Waits for the first message before starting the timer so that
+        historical messages delivered by stail at startup are all captured
+        in the first analysis window.
+        """
+        await self._first_message.wait()
         await self._buffer.ticker(self._queue)
 
     async def _dispatch_task(self) -> None:
@@ -164,11 +184,13 @@ class AnalyzerEngine:
         if self._on_status is not None:
             self._on_status(self._buffer.count, self._next_in_sec(), "analyzing")
 
+        prior = list(self._recent_analyses) if self._recent_analyses else None
         user_prompt = build_user_prompt(
             result.messages,
             result.window_start,
             result.window_end,
             channel_hint=self._channel,
+            prior_context=prior,
         )
 
         # Use get_running_loop() — correct within an async context (Python 3.12+)
@@ -191,6 +213,9 @@ class AnalyzerEngine:
                 }
             )
 
+        # Save this result as context for the next analysis window.
+        self._recent_analyses.append(analysis)
+
         if self._on_analysis is not None:
             # TUI path: notify via callback (do NOT also write to stdout)
             try:
@@ -198,12 +223,19 @@ class AnalyzerEngine:
             except Exception as e:
                 _log.error("on_analysis callback raised: %s", e)
         else:
-            # no-tui path: print Rich panel to stdout
-            self._formatter.print_analysis(
-                analysis,
-                flush_reason=result.reason,
-                channel=self._channel,
-            )
+            # no-tui path: stop the Live status bar so it doesn't overlap
+            # with the Rich panel being printed to stdout, then restart.
+            if self._status is not None:
+                self._status.stop()
+            try:
+                self._formatter.print_analysis(
+                    analysis,
+                    flush_reason=result.reason,
+                    channel=self._channel,
+                )
+            finally:
+                if self._status is not None:
+                    self._status.start()
 
         self._window_start_dt = datetime.now(timezone.utc)
         if self._status is not None:

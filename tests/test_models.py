@@ -7,6 +7,8 @@ from slack_monitor.models import (
     ActivityLevel,
     AnalysisResult,
     AppConfig,
+    Finding,
+    FindingSeverity,
     PostType,
     SlackMessage,
 )
@@ -133,3 +135,42 @@ class TestAppConfig:
         config = AppConfig(base_url="http://custom:8080/v1", window_seconds=30)
         assert config.base_url == "http://custom:8080/v1"
         assert config.window_seconds == 30
+
+
+class TestFinding:
+    def test_default_severity_is_info(self):
+        f = Finding(text="server is running")
+        assert f.severity == FindingSeverity.INFO
+
+    def test_explicit_severity(self):
+        f = Finding(text="server crashed", severity="critical")
+        assert f.severity == FindingSeverity.CRITICAL
+
+    def test_unknown_severity_falls_back_to_info(self):
+        f = Finding(text="something", severity="unknown_value")
+        assert f.severity == FindingSeverity.INFO
+
+    def test_analysis_result_findings_from_dicts(self):
+        result = AnalysisResult(
+            window_start="2026-01-01T00:00:00Z",
+            window_end="2026-01-01T00:01:00Z",
+            message_count=1,
+            findings=[
+                {"text": "server down", "severity": "critical"},
+                {"text": "team notified", "severity": "positive"},
+            ],
+        )
+        assert result.findings[0].severity == FindingSeverity.CRITICAL
+        assert result.findings[1].severity == FindingSeverity.POSITIVE
+
+    def test_analysis_result_findings_coerced_from_strings(self):
+        """LLM returning plain strings should be coerced to Finding with info severity."""
+        result = AnalysisResult(
+            window_start="2026-01-01T00:00:00Z",
+            window_end="2026-01-01T00:01:00Z",
+            message_count=1,
+            findings=["plain string finding"],
+        )
+        assert len(result.findings) == 1
+        assert result.findings[0].text == "plain string finding"
+        assert result.findings[0].severity == FindingSeverity.INFO

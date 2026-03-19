@@ -31,9 +31,17 @@ from textual.worker import Worker, WorkerState
 from slack_monitor.buffer import FlushReason, MessageBuffer
 from slack_monitor.formatter import Formatter
 from slack_monitor.llm import LLMClient
-from slack_monitor.models import AnalysisResult, AppConfig, SlackMessage
+from slack_monitor.models import AnalysisResult, AppConfig, FindingSeverity, SlackMessage
 
 _log = logging.getLogger(__name__)
+
+_FINDING_TAG = {
+    FindingSeverity.INFO:     ("INFO", "dim"),
+    FindingSeverity.POSITIVE: ("OK  ", "green"),
+    FindingSeverity.WARNING:  ("WARN", "yellow"),
+    FindingSeverity.NEGATIVE: ("ALRT", "red"),
+    FindingSeverity.CRITICAL: ("CRIT", "bold red"),
+}
 
 _SENTIMENT_STYLE = {
     "positive": "green",
@@ -86,8 +94,8 @@ class SlackMonitorApp(App):
 
     #top-pane {
         layout: horizontal;
-        height: 40%;
-        min-height: 10;
+        height: 2fr;
+        min-height: 14;
     }
 
     #status-panel {
@@ -147,6 +155,15 @@ class SlackMonitorApp(App):
         yield RichLog(id="log-panel", highlight=True, markup=True, auto_scroll=True)
 
     def on_mount(self) -> None:
+        # Textual enables terminal focus-event reporting (ESC[?1004h) during
+        # startup.  When the terminal sends ESC[I (focus-in) during a repaint
+        # the sequence can leak into the display as '^[[I' at the cursor
+        # position.  Disable focus reporting immediately after mount.
+        try:
+            with open("/dev/tty", "wb", buffering=0) as _tty:
+                _tty.write(b"\x1b[?1004l")
+        except OSError:
+            pass
         # exit_on_error=False: errors are shown in the log panel instead of crashing
         self.run_worker(self._run_engine(), exclusive=True, exit_on_error=False)
 
@@ -277,13 +294,27 @@ def _render_analysis(result: AnalysisResult) -> str:
         lines.append(f"[bold]TOPICS[/bold]  {', '.join(result.topics)}")
     lines.append(
         f"[bold]MOOD  [/bold]  [{sentiment_style}]{result.sentiment}[/{sentiment_style}]"
+        f"   [{activity_style}]{result.activity_level.value}[/{activity_style}]"
     )
+    if result.findings:
+        lines.append("")
+        lines.append("[bold yellow]FINDINGS[/bold yellow]")
+        for finding in result.findings:
+            tag, style = _FINDING_TAG.get(finding.severity, ("INFO", "dim"))
+            lines.append(f"  \\[[{style}]{tag}[/{style}]] {finding.text}")
     if result.key_events:
         lines.append("")
-        lines.append("[bold]EVENTS[/bold]")
+        lines.append("[bold]NEW[/bold]")
         for ev in result.key_events:
             lines.append(f"  • {ev}")
-    if result.summary:
+    if result.ongoing_summary:
+        lines.append("")
+        lines.append("[bold cyan]SITUATION[/bold cyan]")
+        lines.append(result.ongoing_summary)
+        if result.summary and result.summary != result.ongoing_summary:
+            lines.append("")
+            lines.append(f"[dim][bold]THIS WIN[/bold]  {result.summary}[/dim]")
+    elif result.summary:
         lines.append("")
         lines.append(result.summary)
 

@@ -3,8 +3,8 @@
 Real-time Slack channel activity summarizer powered by a local or cloud LLM.
 
 Reads Slack messages streamed by [stail](https://github.com/magifd2/stail) and produces
-periodic summaries of what's happening in the channel — topics, sentiment, key events,
-and a prose summary — rendered in the terminal.
+periodic summaries of what's happening in the channel — topics, sentiment, cumulative
+findings, and situation summary — rendered in a live TUI.
 
 ## How It Works
 
@@ -15,8 +15,8 @@ stail tail -f --format json -c "#general" | slack-monitor --channel general
 1. `stail` streams Slack messages as JSONL to stdout
 2. `slack-monitor` reads stdin, accumulates messages in a time/count window
 3. Each window is sent to an LLM (local or cloud, OpenAI-compatible API)
-4. The LLM returns structured analysis (JSON)
-5. Results are displayed as Rich terminal panels
+4. The LLM returns structured analysis (JSON) including cumulative findings that persist across windows
+5. Results are displayed in a three-panel TUI (status / analysis / message log)
 
 ## Requirements
 
@@ -88,14 +88,17 @@ export SLACK_MONITOR_MODEL="vertex_ai/gemini-2.0-flash"
 ## Usage
 
 ```bash
-# Basic usage
-stail tail -f --format json -c "#general" | slack-monitor
-
-# With channel name in display
+# TUI mode (default) — three-panel live display
 stail tail -f --format json -c "#general" | slack-monitor --channel general
+
+# Plain mode — Rich panels printed to stdout
+stail tail -f --format json -c "#general" | slack-monitor --no-tui
 
 # Custom window (30 seconds)
 stail tail -f --format json -c "#general" | slack-monitor --window 30
+
+# Force output language
+stail tail -f --format json -c "#general" | slack-monitor --language Japanese
 
 # Debug mode with raw LLM output
 stail tail -f --format json -c "#general" | slack-monitor --debug --show-raw
@@ -106,21 +109,41 @@ stail tail -f --format json -c "#general" | slack-monitor --model vertex_ai/gemi
 
 ## Analysis Output
 
-Each analysis window is displayed as a terminal panel:
+### TUI mode (default)
+
+Three-panel layout:
 
 ```
-╭─ #general  10:44:00Z → 10:45:00Z  50 msgs  active  ⏱ time ──────╮
-│ TOPICS:  deployment, incident-response, rollback                  │
-│ MOOD:    negative                                                  │
-│ EVENTS:                                                            │
-│   • Production deploy #347 triggered rollback                     │
-│   • Incident declared by @alice                                   │
-│                                                                    │
-│ The team responded to a failed deployment of service X. Alice     │
-│ declared an incident at 10:44:23. Bob initiated a rollback,       │
-│ which completed by 10:44:58.                                       │
-╰────────────────────────────────────────────────────────────────────╯
+┌──────────────────────────────────────────────────────────────┐
+│ slack-monitor  #general                          12:34:56    │  ← header
+├─────────────────────┬────────────────────────────────────────┤
+│ SYSTEM STATUS       │ 2026-03-19 12:33 → 12:34  12 msgs      │
+│                     │                                        │
+│ Buffer  0 msgs      │ TOPICS  deployment, rollback           │
+│ Next    45s         │ MOOD    negative   active              │
+│ Status  waiting     │                                        │
+│                     │ FINDINGS                               │
+│                     │   [CRIT] Deploy #347 failed at 12:33   │
+│                     │   [WARN] Rollback in progress          │
+│                     │                                        │
+│                     │ SITUATION                              │
+│                     │ Production deploy failed; team is      │
+│                     │ executing rollback procedure.          │
+├─────────────────────┴────────────────────────────────────────┤
+│ 12:33:01 @alice  deploy #347 started                        │
+│ 12:33:42 @bob    it's failing, initiating rollback          │
+└──────────────────────────────────────────────────────────────┘
 ```
+
+**FINDINGS** is a cumulative list of concrete facts maintained across analysis windows.
+Each finding has a severity tag: `[INFO]` `[OK]` `[WARN]` `[ALRT]` `[CRIT]`.
+
+**SITUATION** is a rolling synthesis of the overall picture across all recent windows.
+**THIS WIN** (shown below SITUATION when different) describes only what changed in the current window.
+
+### Plain mode (`--no-tui`)
+
+Each analysis window is printed as a Rich panel to stdout.
 
 ## Development
 
@@ -149,5 +172,7 @@ slack-monitor is designed to work reliably with local LLMs that may:
 
 - API keys are never stored in config files or code
 - Slack message content is treated as untrusted input and wrapped in injection-protected tags
+- URLs in messages are defanged (`http://` → `hxxp://`) before being sent to the LLM or displayed
+- LLM output is instructed to defang any domain or URL it mentions in findings/summaries
 - Input validation at all system boundaries (stdin, LLM output, config)
 - See [CLAUDE.md](CLAUDE.md) for full security policy
