@@ -80,11 +80,12 @@ class MessageBuffer:
         if not self._messages:
             return None
 
+        msgs = list(self._messages)
         result = FlushResult(
-            messages=list(self._messages),
+            messages=msgs,
             reason=reason,
-            window_start=self._window_start,
-            window_end=_now_iso(),
+            window_start=msgs[0].timestamp,
+            window_end=msgs[-1].timestamp,
         )
         self._messages.clear()
         self._total_chars = 0

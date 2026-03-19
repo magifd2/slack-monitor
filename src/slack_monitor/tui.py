@@ -213,6 +213,8 @@ class SlackMonitorApp(App):
             await engine.run(reader)
             self.exit()
 
+        except asyncio.CancelledError:
+            pass  # Normal shutdown (e.g. Ctrl+C via Textual)
         except Exception as e:
             log.write(f"[bold red]ERROR:[/bold red] {e}")
             for line in traceback.format_exc().splitlines():

@@ -84,10 +84,12 @@ class AnalyzerEngine:
         tick = asyncio.create_task(self._tick_task(), name="tick")
         dispatch = asyncio.create_task(self._dispatch_task(), name="dispatch")
 
+        _cancelled = False
         try:
             await ingest
         except asyncio.CancelledError:
-            pass
+            _cancelled = True
+            raise
         except Exception as e:
             _log.error("_ingest_task terminated with error: %s", e, exc_info=True)
         finally:
@@ -97,9 +99,10 @@ class AnalyzerEngine:
             if self._status is not None:
                 self._status.stop()
 
-            remaining = self._buffer.flush(FlushReason.TIME)
-            if remaining:
-                await self._process_flush(remaining)
+            if not _cancelled:
+                remaining = self._buffer.flush(FlushReason.TIME)
+                if remaining:
+                    await self._process_flush(remaining)
 
     async def _ingest_task(self, stream: asyncio.StreamReader) -> None:
         """Read messages from stream and add to buffer."""
