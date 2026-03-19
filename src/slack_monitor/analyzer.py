@@ -16,6 +16,7 @@ Callbacks (all optional) allow the TUI to receive events without polling:
 import asyncio
 import collections
 import logging
+import secrets
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
@@ -185,16 +186,19 @@ class AnalyzerEngine:
             self._on_status(self._buffer.count, self._next_in_sec(), "analyzing")
 
         prior = list(self._recent_analyses) if self._recent_analyses else None
+        # Fresh nonce per LLM call — attacker cannot predict the wrapper tag name.
+        nonce = secrets.token_hex(8)
+        system_prompt = build_system_prompt(self._config.analysis_language, nonce=nonce)
         user_prompt = build_user_prompt(
             result.messages,
             result.window_start,
             result.window_end,
             channel_hint=self._channel,
             prior_context=prior,
+            nonce=nonce,
         )
 
         # Use get_running_loop() — correct within an async context (Python 3.12+)
-        system_prompt = build_system_prompt(self._config.analysis_language)
         loop = asyncio.get_running_loop()
         analysis, raw = await loop.run_in_executor(
             None,
