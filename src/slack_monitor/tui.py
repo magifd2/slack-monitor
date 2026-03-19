@@ -20,6 +20,7 @@ import os
 import sys
 import threading
 import traceback
+from datetime import datetime, timezone
 
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal
@@ -77,6 +78,10 @@ class _StatusUpdate(Message):
 
 class SlackMonitorApp(App):
     """Main TUI application for slack-monitor."""
+
+    # Disable mouse tracking — we don't need mouse interaction and enabling
+    # it can cause raw escape codes to leak into the terminal display
+    MOUSE_TRACKING = False
 
     CSS = """
     Screen {
@@ -224,7 +229,7 @@ class SlackMonitorApp(App):
     def on__msg_received(self, event: _MsgReceived) -> None:
         log = self.query_one("#log-panel", RichLog)
         msg = event.msg
-        ts = _short_time(msg.timestamp)
+        ts = _local_datetime(msg.timestamp)
         user = f"@{msg.user_name or msg.user_id or '?'}"
         bot_tag = " [dim][bot][/dim]" if msg.post_type.value == "bot" else ""
         reply_tag = " [dim](reply)[/dim]" if msg.is_reply else ""
@@ -260,8 +265,8 @@ def _render_no_analysis() -> str:
 
 
 def _render_analysis(result: AnalysisResult) -> str:
-    start = _short_time(result.window_start)
-    end = _short_time(result.window_end)
+    start = _local_datetime(result.window_start)
+    end = _local_datetime(result.window_end)
 
     sentiment_style = _SENTIMENT_STYLE.get(result.sentiment, "")
     activity_style = _ACTIVITY_STYLE.get(result.activity_level.value, "")
@@ -289,8 +294,18 @@ def _render_analysis(result: AnalysisResult) -> str:
     return "\n".join(lines)
 
 
-def _short_time(ts: str) -> str:
-    if "T" in ts:
-        time_part = ts.split("T", 1)[1]
-        return time_part.split("Z")[0].split("+")[0].split("-")[0][:8]
-    return ts[:8]
+def _local_datetime(ts: str) -> str:
+    """Convert RFC3339/UTC timestamp to local date+time string."""
+    if not ts:
+        return ""
+    try:
+        if ts.endswith("Z"):
+            dt = datetime.fromisoformat(ts[:-1] + "+00:00")
+        else:
+            dt = datetime.fromisoformat(ts)
+        return dt.astimezone().strftime("%m/%d %H:%M:%S")
+    except (ValueError, TypeError):
+        # Fallback: extract time portion as-is
+        if "T" in ts:
+            return ts.split("T", 1)[1][:8]
+        return ts[:19]
