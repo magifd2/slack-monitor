@@ -18,6 +18,7 @@ import asyncio
 import logging
 import os
 import sys
+import threading
 import traceback
 
 from textual.app import App, ComposeResult
@@ -154,16 +155,30 @@ class SlackMonitorApp(App):
         try:
             from slack_monitor.analyzer import AnalyzerEngine
 
-            # Must use get_running_loop() inside an async context (not get_event_loop())
             loop = asyncio.get_running_loop()
             reader = asyncio.StreamReader()
-            protocol = asyncio.StreamReaderProtocol(reader)
 
-            if self._pipe_fd is not None:
-                pipe_file = open(self._pipe_fd, "rb", buffering=0)
-                await loop.connect_read_pipe(lambda: protocol, pipe_file)
-            else:
-                await loop.connect_read_pipe(lambda: protocol, sys.stdin.buffer)
+            # Read from the stail pipe in a background thread and feed into
+            # the asyncio StreamReader via call_soon_threadsafe.
+            # This avoids connect_read_pipe conflicts with Textual's own
+            # event loop and file descriptor management.
+            fd = self._pipe_fd if self._pipe_fd is not None else os.dup(sys.stdin.fileno())
+
+            def _pipe_reader_thread() -> None:
+                try:
+                    with open(fd, "rb", buffering=0) as pipe:
+                        while True:
+                            data = pipe.read(4096)
+                            if not data:
+                                break
+                            loop.call_soon_threadsafe(reader.feed_data, data)
+                except Exception as exc:
+                    loop.call_soon_threadsafe(reader.set_exception, exc)
+                finally:
+                    loop.call_soon_threadsafe(reader.feed_eof)
+
+            t = threading.Thread(target=_pipe_reader_thread, daemon=True, name="pipe-reader")
+            t.start()
 
             engine = AnalyzerEngine(
                 config=self._config,
