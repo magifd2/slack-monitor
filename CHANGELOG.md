@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- FINDINGS no longer disappear across analysis windows. Two-layer fix:
+  - Prompt: removed the 3–10 item cap that gave the LLM an excuse to drop older
+    findings; LLM is now instructed to carry forward **all** prior findings and may
+    only omit one that has been definitively resolved in the current window.
+  - Client-side guard: after each LLM response, any prior finding absent from the
+    new list is silently restored. A WARNING is logged when this occurs (visible
+    with `--debug`).
+
+---
+
 ## [0.2.0] - 2026-03-20
 
 ### Changed

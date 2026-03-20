@@ -161,6 +161,8 @@ Three-panel layout:
 
 **FINDINGS** is a cumulative list of concrete facts maintained across analysis windows.
 Each finding has a severity tag: `[INFO]` `[OK]` `[WARN]` `[ALRT]` `[CRIT]`.
+Findings persist indefinitely — the LLM is instructed to carry them all forward, and
+any finding the LLM accidentally omits is automatically restored by the client.
 
 **SITUATION** is a rolling synthesis of the overall picture across all recent windows.
 **THIS WIN** (shown below SITUATION when different) describes only what changed in the current window.
