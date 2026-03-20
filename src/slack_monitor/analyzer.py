@@ -221,6 +221,20 @@ class AnalyzerEngine:
                 }
             )
 
+        # Client-side findings guard: re-attach any prior findings the LLM dropped
+        # without an explicit resolution. LLMs sometimes omit older findings even
+        # when instructed to carry them forward.
+        if self._recent_analyses:
+            prior_findings = self._recent_analyses[-1].findings
+            if prior_findings:
+                merged = _merge_findings(prior_findings, analysis.findings)
+                if len(merged) != len(analysis.findings):
+                    _log.warning(
+                        "LLM dropped %d prior finding(s); restoring them.",
+                        len(merged) - len(analysis.findings),
+                    )
+                    analysis = analysis.model_copy(update={"findings": merged})
+
         # Save this result as context for the next analysis window.
         self._recent_analyses.append(analysis)
 
@@ -254,6 +268,25 @@ class AnalyzerEngine:
                 self._on_status(self._buffer.count, self._next_in_sec(), "waiting")
             except Exception as e:
                 _log.error("on_status callback raised: %s", e)
+
+
+def _merge_findings(
+    prior: list,
+    current: list,
+) -> list:
+    """Return current findings with any prior findings the LLM silently dropped.
+
+    A prior finding is considered "covered" if its text appears (case-insensitive,
+    leading/trailing whitespace ignored) anywhere in the current findings list.
+    Findings that were intentionally updated by the LLM will have a matching or
+    similar text and won't be re-added.
+    """
+    current_texts = {f.text.strip().lower() for f in current}
+    restored = []
+    for pf in prior:
+        if pf.text.strip().lower() not in current_texts:
+            restored.append(pf)
+    return list(current) + restored
 
 
 def _make_fallback_analysis(result: FlushResult, raw: str) -> AnalysisResult:

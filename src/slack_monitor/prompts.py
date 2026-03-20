@@ -66,9 +66,11 @@ warning=potential issue or thing to watch, \
 negative=confirmed problem or failure, \
 critical=urgent situation requiring immediate action; \
 preserve all factual detail — do not merge or generalise; \
-update from prior findings: keep confirmed facts, add new ones, mark resolved ones; \
+you MUST carry forward every finding from the prior list — omitting a prior finding is \
+only allowed if the fact has been definitively and explicitly resolved in the current window; \
+add new facts observed in the current window; \
 when a finding references a time, always include both the date and time (e.g. 2026-03-19 14:32); \
-aim for 3-10 items
+there is no maximum — include as many items as needed to cover all known facts
 - summary: describe only what is NEW in the current window; 1-2 sentences
 - ongoing_summary: synthesize the full picture including prior context windows; \
 if there is no prior context, this may be the same as summary
